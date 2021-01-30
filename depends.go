@@ -5,13 +5,41 @@ import (
 	"context"
 	"fmt"
 	"runtime/debug"
+	"sync"
 	"sync/atomic"
 	"time"
 )
 
+type DataContainer struct {
+	mu sync.Mutex
+	dataMap map[string]interface{}
+}
+
+func NewDataContainer() *DataContainer {
+	return &DataContainer{
+		mu:      sync.Mutex{},
+		dataMap: make(map[string]interface{}),
+	}
+}
+
+func (dc *DataContainer) Set(key string, value interface{}) {
+	dc.mu.Lock()
+	defer dc.mu.Unlock()
+
+	dc.dataMap[key] = value
+}
+
+func (dc *DataContainer) Get(key string) (value interface{}) {
+	dc.mu.Lock()
+	defer dc.mu.Unlock()
+	value, _ = dc.dataMap[key]
+
+	return
+}
+
 type IService interface {
 	Name() string
-	Run(ctx context.Context) error
+	Run(ctx context.Context, dc *DataContainer) error
 	Decode(receiver interface{}) error
 }
 
@@ -26,9 +54,8 @@ type Depends struct {
 	executecStatus  int32             // 总体进度表 0 - 未结束 1 - 已结束
 	inChanels       map[string]chan bool
 	outChanel       chan string
-	ctrlCtx         context.Context
-	ctrlCancel      context.CancelFunc
 	timeout         time.Duration
+	dc 				*DataContainer
 }
 
 func NewDepends(timeout time.Duration) *Depends {
@@ -44,6 +71,7 @@ func NewDepends(timeout time.Duration) *Depends {
 		executeMap:      make(map[string]*int32),
 		executecStatus:  0,
 		timeout:         timeout,
+		dc:				 NewDataContainer(),
 	}
 }
 
@@ -125,7 +153,6 @@ func (me *Depends) Execute(ctx context.Context) {
 
 // 初始化
 func (me *Depends) bootstrap() error {
-	me.ctrlCtx, me.ctrlCancel = context.WithTimeout(context.Background(), 2000*time.Millisecond)
 
 	for _, eachService := range me.serviceMap {
 		me.inChanels[eachService.Name()] = make(chan bool)
@@ -210,7 +237,7 @@ func (me *Depends) operate(ctx context.Context) error {
 			if flag, open := <-in; flag && open {
 				tNow := time.Now()
 				// 执行
-				s.Run(ctx)
+				s.Run(ctx, me.dc)
 				atomic.StoreInt32(me.executeMap[s.Name()], 1)
 				eNow := time.Now()
 				fmt.Println(s.Name(), "执行", eNow.Sub(tNow).Milliseconds())

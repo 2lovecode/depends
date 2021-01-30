@@ -23,7 +23,7 @@ func (s *ServiceA) Name() string {
 	return "service_a"
 }
 
-func (s * ServiceA) Run(ctx context.Context) error {
+func (s * ServiceA) Run(ctx context.Context, dc *DataContainer) error {
 	s.data = ServiceAData{
 		Message:"I am service a",
 		Query: ctx.Value("q").(string),
@@ -55,7 +55,7 @@ func (s *ServiceB) Name() string {
 	return "service_b"
 }
 
-func (s * ServiceB) Run(ctx context.Context) error {
+func (s * ServiceB) Run(ctx context.Context, dc *DataContainer) error {
 	s.data = ServiceBData{
 		Message:"I am service b",
 		Query: ctx.Value("q").(string),
@@ -87,7 +87,7 @@ func (s *ServiceC) Name() string {
 	return "service_c"
 }
 
-func (s * ServiceC) Run(ctx context.Context) error {
+func (s * ServiceC) Run(ctx context.Context, dc *DataContainer) error {
 	s.data = ServiceCData{
 		Message:"I am service c",
 		Query: ctx.Value("q").(string),
