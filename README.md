@@ -1,4 +1,4 @@
-## 并行依赖模型
+## 有依赖关系的并行模型
 
 #### 安装
     go get -u github.com/2lovecode/depends
