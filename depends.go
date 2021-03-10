@@ -143,7 +143,8 @@ func (me *Depends) Execute(ctx context.Context) {
 				}
 			}
 			if finishExecuteCount >= int(me.serviceCount) {
-				(me.ctxCtrlCancel)()
+				atomic.StoreInt32(&me.executeStatus, 1)
+				breakFlag = true
 			}
 		}
 
