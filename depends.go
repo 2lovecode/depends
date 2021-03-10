@@ -1,6 +1,5 @@
 package depends
 
-
 import (
 	"context"
 	"fmt"
@@ -51,10 +50,13 @@ type Depends struct {
 	inversedDepends map[string][]string // 反依赖关系
 	executeFlags    []int32
 	executeMap      map[string]*int32 // 执行列表 每一个服务对应一条记录，记录中：0 - 未执行 1 - 执行完毕
-	executecStatus  int32             // 总体进度表 0 - 未结束 1 - 已结束
+	executeStatus   int32             // 总体进度表 0 - 未结束 1 - 已结束
 	inChanels       map[string]chan bool
 	outChanel       chan string
+	changeStatus	chan bool
 	timeout         time.Duration
+	ctxCtrl			context.Context
+	ctxCtrlCancel	context.CancelFunc
 	dc 				*DataContainer
 }
 
@@ -69,7 +71,7 @@ func NewDepends(timeout time.Duration) *Depends {
 		inversedDepends: make(map[string][]string, 0),
 		executeFlags:    make([]int32, 500),
 		executeMap:      make(map[string]*int32),
-		executecStatus:  0,
+		executeStatus:  0,
 		timeout:         timeout,
 		dc:				 NewDataContainer(),
 	}
@@ -101,17 +103,19 @@ func (me *Depends) AddDepend(service IService, serviceDepends []IService) error 
 
 // 执行
 func (me *Depends) Execute(ctx context.Context) {
-	timeOutCtrl := time.After(me.timeout)
+	me.ctxCtrl, me.ctxCtrlCancel = context.WithTimeout(context.Background(), me.timeout)
 	// 输入输出通道
 	me.inChanels = make(map[string]chan bool)
 	me.outChanel = make(chan string)
+	me.changeStatus = make(chan bool)
 	defer func() {
-		atomic.StoreInt32(&(me.executecStatus), 1)
-		close(me.outChanel)
-
-		for _, in := range me.inChanels {
-			close(in)
-		}
+		//atomic.StoreInt32(&(me.executecStatus), 1)
+		//close(me.outChanel)
+		//
+		//for _, in := range me.inChanels {
+		//	close(in)
+		//}
+		//close(me.changeStatus)
 	}()
 	// 初始化 解析出反依赖关系和第一波调用队列
 	me.bootstrap()
@@ -125,14 +129,13 @@ func (me *Depends) Execute(ctx context.Context) {
 	// 运行
 	me.operate(ctx)
 
-	tick := time.Tick(1 * time.Millisecond)
 	for {
 		breakFlag := false
 		select {
-		case <-timeOutCtrl:
-			atomic.StoreInt32(&me.executecStatus, 1)
+		case <-me.ctxCtrl.Done():
+			atomic.StoreInt32(&me.executeStatus, 1)
 			breakFlag = true
-		case <-tick:
+		case <-me.changeStatus:
 			finishExecuteCount := 0
 			for _, flag := range me.executeMap {
 				if atomic.LoadInt32(flag) == 1 {
@@ -140,8 +143,7 @@ func (me *Depends) Execute(ctx context.Context) {
 				}
 			}
 			if finishExecuteCount >= int(me.serviceCount) {
-				atomic.StoreInt32(&me.executecStatus, 1)
-				breakFlag = true
+				(me.ctxCtrlCancel)()
 			}
 		}
 
@@ -190,7 +192,7 @@ func (me *Depends) dispatch() error {
 		for serviceName := range me.outChanel {
 			if serviceName != "" {
 				executeQueue := make([]string, 0)
-				if atomic.LoadInt32(&me.executecStatus) != 1 {
+				if atomic.LoadInt32(&me.executeStatus) == 0 {
 					if inversedDepends, ok := me.inversedDepends[serviceName]; ok {
 						for _, inversedDepend := range inversedDepends {
 							// 检查依赖项
@@ -231,7 +233,17 @@ func (me *Depends) operate(ctx context.Context) error {
 			defer func() {
 				// 错误处理
 				if p := recover(); p != nil {
-					fmt.Println(debug.Stack())
+					atomic.StoreInt32(me.executeMap[s.Name()], 1)
+					select {
+					case <-me.ctxCtrl.Done():
+						fmt.Println("timeout ....")
+					default:
+						if atomic.LoadInt32(&me.executeStatus) == 0 {
+							me.changeStatus <- true
+							me.outChanel <- s.Name()
+						}
+					}
+					fmt.Println(string(debug.Stack()))
 				}
 			}()
 			if flag, open := <-in; flag && open {
@@ -241,7 +253,11 @@ func (me *Depends) operate(ctx context.Context) error {
 				atomic.StoreInt32(me.executeMap[s.Name()], 1)
 				eNow := time.Now()
 				fmt.Println(s.Name(), "执行", eNow.Sub(tNow).Milliseconds())
-				if atomic.LoadInt32(&me.executecStatus) != 1 {
+				select {
+				case <-me.ctxCtrl.Done():
+					fmt.Println("a")
+				default:
+					me.changeStatus <- true
 					me.outChanel <- s.Name()
 				}
 			}

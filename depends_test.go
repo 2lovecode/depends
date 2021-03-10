@@ -103,32 +103,64 @@ func (s * ServiceC) Decode(receiver interface{}) error {
 }
 
 func TestDepends_Execute(t *testing.T) {
-	ctx := context.WithValue(context.TODO(), "q", "test")
+	for i := 0; i < 4; i++ {
+		ctx := context.WithValue(context.TODO(), "q", "test")
 
-	sA := NewServiceA()
-	sB := NewServiceB()
-	sC := NewServiceC()
+		sA := NewServiceA()
+		sB := NewServiceB()
+		sC := NewServiceC()
 
-	hd := NewDepends(100 * time.Millisecond)
+		hd := NewDepends(100 * time.Millisecond)
 
-	hd.Register(sA)
-	hd.Register(sB)
-	hd.Register(sC)
+		hd.Register(sA)
+		hd.Register(sB)
+		hd.Register(sC)
+
+		hd.AddDepend(sC, []IService{sB})
+		hd.AddDepend(sB, []IService{sA})
+
+		hd.Execute(ctx)
+
+		sAData := ServiceAData{}
+		sBData := ServiceBData{}
+		sCData := ServiceCData{}
+
+		sA.Decode(&sAData)
+		sB.Decode(&sBData)
+		sC.Decode(&sCData)
+
+		fmt.Println(sAData, sBData, sCData)
+	}
+}
+
+func BenchmarkDepends_Execute(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		ctx := context.WithValue(context.TODO(), "q", "test")
+
+		sA := NewServiceA()
+		sB := NewServiceB()
+		sC := NewServiceC()
+
+		hd := NewDepends(100 * time.Millisecond)
+
+		hd.Register(sA)
+		hd.Register(sB)
+		hd.Register(sC)
 
 
-	hd.AddDepend(sC, []IService{sB})
-	hd.AddDepend(sB, []IService{sA})
+		hd.AddDepend(sC, []IService{sB})
+		hd.AddDepend(sB, []IService{sA})
 
-	hd.Execute(ctx)
+		hd.Execute(ctx)
+		sAData := ServiceAData{}
+		sBData := ServiceBData{}
+		sCData := ServiceCData{}
 
-	sAData := ServiceAData{}
-	sBData := ServiceBData{}
-	sCData := ServiceCData{}
 
+		sA.Decode(&sAData)
+		sB.Decode(&sBData)
+		sC.Decode(&sCData)
 
-	sA.Decode(&sAData)
-	sB.Decode(&sBData)
-	sC.Decode(&sCData)
-
-	fmt.Println(sAData, sBData, sCData)
+		fmt.Println(sAData, sBData, sCData)
+	}
 }
