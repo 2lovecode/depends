@@ -53,7 +53,6 @@ type Depends struct {
 	executeStatus   int32             // 总体进度表 0 - 未结束 1 - 已结束
 	inChanels       map[string]chan bool
 	outChanel       chan string
-	changeStatus	chan bool
 	timeout         time.Duration
 	ctxCtrl			context.Context
 	ctxCtrlCancel	context.CancelFunc
@@ -107,7 +106,6 @@ func (me *Depends) Execute(ctx context.Context) {
 	// 输入输出通道
 	me.inChanels = make(map[string]chan bool)
 	me.outChanel = make(chan string)
-	me.changeStatus = make(chan bool)
 	defer func() {
 		// 错误处理
 		if p := recover(); p != nil {
@@ -116,7 +114,6 @@ func (me *Depends) Execute(ctx context.Context) {
 					close(in)
 				}
 				close(me.outChanel)
-				close(me.changeStatus)
 			}
 			fmt.Println(string(debug.Stack()))
 		}
@@ -134,22 +131,12 @@ func (me *Depends) Execute(ctx context.Context) {
 	// 运行
 	me.operate(ctx)
 
-	for _ = range me.changeStatus {
-		finishExecuteCount := 0
-		for _, flag := range me.executeMap {
-			if *flag == 1 {
-				finishExecuteCount++
-			}
+	<-me.ctxCtrl.Done()
+	if atomic.AddInt32(&me.executeStatus, 1) == 1 {
+		for _, in := range me.inChanels {
+			close(in)
 		}
-		if finishExecuteCount >= int(me.serviceCount) {
-			if atomic.AddInt32(&me.executeStatus, 1) == 1 {
-				for _, in := range me.inChanels {
-					close(in)
-				}
-				close(me.outChanel)
-				close(me.changeStatus)
-			}
-		}
+		close(me.outChanel)
 	}
 }
 
@@ -231,6 +218,7 @@ func (me *Depends) operate(ctx context.Context) error {
 
 		go func(in chan bool, s IService) {
 			startC := make(chan bool)
+			var addFlag int32 = 0
 
 			defer func() {
 				// 错误处理
@@ -241,37 +229,53 @@ func (me *Depends) operate(ctx context.Context) error {
 			}()
 			if flag, open := <-in; flag && open {
 				// 执行
-				go func(startC chan bool) {
+				go func(startC chan bool, addFlag int32) {
 					defer func() {
 						if p := recover(); p != nil {
-							startC <- true
+							if atomic.AddInt32(&addFlag, 1) == 1 {
+								startC <- true
+							}
 							fmt.Println(string(debug.Stack()))
 						}
 					}()
 					tNow := time.Now()
 					s.Run(ctx, me.dc)
-					startC <- true
+					if atomic.AddInt32(&addFlag, 1) == 1 {
+						startC <- true
+						close(startC)
+					}
 					eNow := time.Now()
 					fmt.Println(s.Name(), "执行", eNow.Sub(tNow).Milliseconds())
-				}(startC)
+				}(startC, addFlag)
 
 				select {
 				case <-me.ctxCtrl.Done():
+					atomic.AddInt32(&addFlag, 2)
 					if atomic.AddInt32(&me.executeStatus, 1) == 1 {
 						for _, in := range me.inChanels {
 							close(in)
 						}
 						close(me.outChanel)
-						close(me.changeStatus)
 					}
-					fmt.Println("超时")
 				case <-startC:
-					if atomic.LoadInt32(&me.executeStatus) == 0 {
-						atomic.StoreInt32(me.executeMap[s.Name()], 1)
-						me.changeStatus <- true
-						me.outChanel <- s.Name()
+					atomic.StoreInt32(me.executeMap[s.Name()], 1)
+					finishExecuteCount := 0
+					finishFlag := false
+					for _, flag := range me.executeMap {
+						if *flag == 1 {
+							finishExecuteCount++
+						}
 					}
-					close(startC)
+					if finishExecuteCount >= int(me.serviceCount) {
+						finishFlag = true
+					}
+					if !finishFlag {
+						if atomic.LoadInt32(&me.executeStatus) == 0 {
+							me.outChanel <- s.Name()
+						}
+					} else {
+						(me.ctxCtrlCancel)()
+					}
 				}
 			}
 

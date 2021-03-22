@@ -5,3 +5,5 @@
     
 #### 单元测试
     go test -v .
+#### 基准测试
+    go test -bench=. -benchtime=6s ./
