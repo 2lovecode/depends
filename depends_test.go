@@ -24,6 +24,7 @@ func (s *ServiceA) Name() string {
 }
 
 func (s * ServiceA) Run(ctx context.Context, dc *DataContainer) error {
+	time.Sleep(10 * time.Millisecond)
 	s.data = ServiceAData{
 		Message:"I am service a",
 		Query: ctx.Value("q").(string),
@@ -56,6 +57,7 @@ func (s *ServiceB) Name() string {
 }
 
 func (s * ServiceB) Run(ctx context.Context, dc *DataContainer) error {
+	time.Sleep(20 * time.Millisecond)
 	s.data = ServiceBData{
 		Message:"I am service b",
 		Query: ctx.Value("q").(string),
@@ -88,6 +90,7 @@ func (s *ServiceC) Name() string {
 }
 
 func (s * ServiceC) Run(ctx context.Context, dc *DataContainer) error {
+	time.Sleep(15 * time.Millisecond)
 	s.data = ServiceCData{
 		Message:"I am service c",
 		Query: ctx.Value("q").(string),

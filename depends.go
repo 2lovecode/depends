@@ -109,14 +109,19 @@ func (me *Depends) Execute(ctx context.Context) {
 	me.outChanel = make(chan string)
 	me.changeStatus = make(chan bool)
 	defer func() {
-		//atomic.StoreInt32(&(me.executecStatus), 1)
-		//close(me.outChanel)
-		//
-		//for _, in := range me.inChanels {
-		//	close(in)
-		//}
-		//close(me.changeStatus)
+		// 错误处理
+		if p := recover(); p != nil {
+			if atomic.AddInt32(&me.executeStatus, 1) == 1 {
+				for _, in := range me.inChanels {
+					close(in)
+				}
+				close(me.outChanel)
+				close(me.changeStatus)
+			}
+			fmt.Println(string(debug.Stack()))
+		}
 	}()
+
 	// 初始化 解析出反依赖关系和第一波调用队列
 	me.bootstrap()
 
@@ -129,27 +134,21 @@ func (me *Depends) Execute(ctx context.Context) {
 	// 运行
 	me.operate(ctx)
 
-	for {
-		breakFlag := false
-		select {
-		case <-me.ctxCtrl.Done():
-			atomic.StoreInt32(&me.executeStatus, 1)
-			breakFlag = true
-		case <-me.changeStatus:
-			finishExecuteCount := 0
-			for _, flag := range me.executeMap {
-				if atomic.LoadInt32(flag) == 1 {
-					finishExecuteCount++
-				}
-			}
-			if finishExecuteCount >= int(me.serviceCount) {
-				atomic.StoreInt32(&me.executeStatus, 1)
-				breakFlag = true
+	for _ = range me.changeStatus {
+		finishExecuteCount := 0
+		for _, flag := range me.executeMap {
+			if *flag == 1 {
+				finishExecuteCount++
 			}
 		}
-
-		if breakFlag {
-			break
+		if finishExecuteCount >= int(me.serviceCount) {
+			if atomic.AddInt32(&me.executeStatus, 1) == 1 {
+				for _, in := range me.inChanels {
+					close(in)
+				}
+				close(me.outChanel)
+				close(me.changeStatus)
+			}
 		}
 	}
 }
@@ -231,35 +230,48 @@ func (me *Depends) operate(ctx context.Context) error {
 	for _, service := range me.serviceMap {
 
 		go func(in chan bool, s IService) {
+			startC := make(chan bool)
+
 			defer func() {
 				// 错误处理
 				if p := recover(); p != nil {
 					atomic.StoreInt32(me.executeMap[s.Name()], 1)
-					select {
-					case <-me.ctxCtrl.Done():
-						fmt.Println("timeout ....")
-					default:
-						if atomic.LoadInt32(&me.executeStatus) == 0 {
-							me.changeStatus <- true
-							me.outChanel <- s.Name()
-						}
-					}
 					fmt.Println(string(debug.Stack()))
 				}
 			}()
 			if flag, open := <-in; flag && open {
-				tNow := time.Now()
 				// 执行
-				s.Run(ctx, me.dc)
-				atomic.StoreInt32(me.executeMap[s.Name()], 1)
-				eNow := time.Now()
-				fmt.Println(s.Name(), "执行", eNow.Sub(tNow).Milliseconds())
+				go func(startC chan bool) {
+					defer func() {
+						if p := recover(); p != nil {
+							startC <- true
+							fmt.Println(string(debug.Stack()))
+						}
+					}()
+					tNow := time.Now()
+					s.Run(ctx, me.dc)
+					startC <- true
+					eNow := time.Now()
+					fmt.Println(s.Name(), "执行", eNow.Sub(tNow).Milliseconds())
+				}(startC)
+
 				select {
 				case <-me.ctxCtrl.Done():
-					fmt.Println("a")
-				default:
-					me.changeStatus <- true
-					me.outChanel <- s.Name()
+					if atomic.AddInt32(&me.executeStatus, 1) == 1 {
+						for _, in := range me.inChanels {
+							close(in)
+						}
+						close(me.outChanel)
+						close(me.changeStatus)
+					}
+					fmt.Println("超时")
+				case <-startC:
+					if atomic.LoadInt32(&me.executeStatus) == 0 {
+						atomic.StoreInt32(me.executeMap[s.Name()], 1)
+						me.changeStatus <- true
+						me.outChanel <- s.Name()
+					}
+					close(startC)
 				}
 			}
 
