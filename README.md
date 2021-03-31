@@ -7,3 +7,5 @@
     go test -v .
 #### 基准测试
     go test -bench=. -benchtime=6s ./
+#### 静态检测
+    go test -bench=. --race

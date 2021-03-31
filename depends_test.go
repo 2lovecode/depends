@@ -12,7 +12,7 @@ type ServiceAData struct {
 	Query string
 }
 type ServiceA struct {
-	data ServiceAData
+	CommonService
 }
 
 func NewServiceA() *ServiceA {
@@ -23,18 +23,22 @@ func (s *ServiceA) Name() string {
 	return "service_a"
 }
 
-func (s * ServiceA) Run(ctx context.Context, dc *DataContainer) error {
+func (s * ServiceA) Run(ctx context.Context) error {
 	time.Sleep(10 * time.Millisecond)
-	s.data = ServiceAData{
+	s.GetDataContainer().Set(s.Name(), ServiceAData{
 		Message:"I am service a",
 		Query: ctx.Value("q").(string),
-	}
+	})
 	return nil
 }
 
 func (s * ServiceA) Decode(receiver interface{}) error {
+	data := ServiceAData{}
+	if d, ok := s.GetDataContainer().Get(s.Name()).(ServiceAData); ok {
+		data = d
+	}
 	if _, ok := receiver.(*ServiceAData); ok {
-		*(receiver.(*ServiceAData)) = s.data
+		*(receiver.(*ServiceAData)) = data
 	}
 	return nil
 }
@@ -45,7 +49,7 @@ type ServiceBData struct {
 	Query string
 }
 type ServiceB struct {
-	data ServiceBData
+	CommonService
 }
 
 func NewServiceB() *ServiceB {
@@ -56,18 +60,22 @@ func (s *ServiceB) Name() string {
 	return "service_b"
 }
 
-func (s * ServiceB) Run(ctx context.Context, dc *DataContainer) error {
+func (s * ServiceB) Run(ctx context.Context) error {
 	time.Sleep(20 * time.Millisecond)
-	s.data = ServiceBData{
+	s.GetDataContainer().Set(s.Name(), ServiceBData{
 		Message:"I am service b",
 		Query: ctx.Value("q").(string),
-	}
+	})
 	return nil
 }
 
 func (s * ServiceB) Decode(receiver interface{}) error {
+	data := ServiceBData{}
+	if d, ok := s.GetDataContainer().Get(s.Name()).(ServiceBData); ok {
+		data = d
+	}
 	if _, ok := receiver.(*ServiceBData); ok {
-		*(receiver.(*ServiceBData)) = s.data
+		*(receiver.(*ServiceBData)) = data
 	}
 	return nil
 }
@@ -78,7 +86,7 @@ type ServiceCData struct {
 	Query string
 }
 type ServiceC struct {
-	data ServiceCData
+	CommonService
 }
 
 func NewServiceC() *ServiceC {
@@ -89,18 +97,22 @@ func (s *ServiceC) Name() string {
 	return "service_c"
 }
 
-func (s * ServiceC) Run(ctx context.Context, dc *DataContainer) error {
+func (s * ServiceC) Run(ctx context.Context) error {
 	time.Sleep(15 * time.Millisecond)
-	s.data = ServiceCData{
+	s.GetDataContainer().Set(s.Name(), ServiceCData{
 		Message:"I am service c",
 		Query: ctx.Value("q").(string),
-	}
+	})
 	return nil
 }
 
 func (s * ServiceC) Decode(receiver interface{}) error {
+	data := ServiceCData{}
+	if d, ok := s.GetDataContainer().Get(s.Name()).(ServiceCData); ok {
+		data = d
+	}
 	if _, ok := receiver.(*ServiceCData); ok {
-		*(receiver.(*ServiceCData)) = s.data
+		*(receiver.(*ServiceCData)) = data
 	}
 	return nil
 }

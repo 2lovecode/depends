@@ -10,36 +10,58 @@ import (
 )
 
 type DataContainer struct {
-	mu sync.Mutex
-	dataMap map[string]interface{}
+	dataMap sync.Map
 }
 
 func NewDataContainer() *DataContainer {
-	return &DataContainer{
-		mu:      sync.Mutex{},
-		dataMap: make(map[string]interface{}),
+	return &DataContainer{}
+}
+func (sd *DataContainer) Set(key string, value interface{}) {
+	sd.dataMap.Store(key, value)
+}
+
+func (sd *DataContainer) Get(key string) (value interface{}) {
+	if v, ok := sd.dataMap.Load(key); ok && v != nil {
+		value = v
+	} else {
+		value = map[string]string{}
 	}
-}
-
-func (dc *DataContainer) Set(key string, value interface{}) {
-	dc.mu.Lock()
-	defer dc.mu.Unlock()
-
-	dc.dataMap[key] = value
-}
-
-func (dc *DataContainer) Get(key string) (value interface{}) {
-	dc.mu.Lock()
-	defer dc.mu.Unlock()
-	value, _ = dc.dataMap[key]
-
 	return
 }
 
 type IService interface {
 	Name() string
-	Run(ctx context.Context, dc *DataContainer) error
+	SetDataContainer (dc *DataContainer)
+	GetDataContainer () *DataContainer
+	Run(ctx context.Context) error
 	Decode(receiver interface{}) error
+}
+
+type CommonService struct {
+	dc *DataContainer
+}
+
+func (cs *CommonService) SetDataContainer(dc *DataContainer) {
+	cs.dc = dc
+}
+
+func (cs *CommonService) GetDataContainer () *DataContainer {
+	if cs.dc == nil {
+		return &DataContainer{}
+	}
+	return cs.dc
+}
+
+func (cs *CommonService) Name() string{
+	return "common_service"
+}
+
+func (cs *CommonService) Run(ctx context.Context) error {
+	return nil
+}
+
+func (cs *CommonService) Decode(receiver interface{}) error {
+	return nil
 }
 
 type Depends struct {
@@ -78,6 +100,8 @@ func NewDepends(timeout time.Duration) *Depends {
 
 // 注册服务
 func (me *Depends) Register(service IService) error {
+	me.dc.Set(service.Name(), map[string]interface{}{})
+	service.SetDataContainer(me.dc)
 	me.serviceMap[service.Name()] = service
 	me.executeMap[service.Name()] = &me.executeFlags[int(me.serviceCount)]
 	me.serviceCount++
@@ -109,12 +133,6 @@ func (me *Depends) Execute(ctx context.Context) {
 	defer func() {
 		// 错误处理
 		if p := recover(); p != nil {
-			if atomic.AddInt32(&me.executeStatus, 1) == 1 {
-				for _, in := range me.inChanels {
-					close(in)
-				}
-				close(me.outChanel)
-			}
 			fmt.Println(string(debug.Stack()))
 		}
 	}()
@@ -132,12 +150,6 @@ func (me *Depends) Execute(ctx context.Context) {
 	me.operate(ctx)
 
 	<-me.ctxCtrl.Done()
-	if atomic.AddInt32(&me.executeStatus, 1) == 1 {
-		for _, in := range me.inChanels {
-			close(in)
-		}
-		close(me.outChanel)
-	}
 }
 
 // 初始化
@@ -176,37 +188,53 @@ func (me *Depends) fire() error {
 // 调度
 func (me *Depends) dispatch() error {
 	tGo(func() error {
-		for serviceName := range me.outChanel {
-			if serviceName != "" {
-				executeQueue := make([]string, 0)
-				if atomic.LoadInt32(&me.executeStatus) == 0 {
-					if inversedDepends, ok := me.inversedDepends[serviceName]; ok {
-						for _, inversedDepend := range inversedDepends {
-							// 检查依赖项
-							flag := true
-							if depends, o := me.depends[inversedDepend]; o {
-								for _, depend := range depends {
-									if atomic.LoadInt32(me.executeMap[depend]) != 1 {
-										flag = false
-										break
+		for {
+			breakFlag := false
+			select {
+			case serviceName, ok := <-me.outChanel:
+				if !ok {
+					breakFlag = true
+				} else {
+					if serviceName != "" {
+						executeQueue := make([]string, 0)
+						if atomic.LoadInt32(&me.executeStatus) == 0 {
+							if inversedDepends, ok := me.inversedDepends[serviceName]; ok {
+								for _, inversedDepend := range inversedDepends {
+									// 检查依赖项
+									flag := true
+									if depends, o := me.depends[inversedDepend]; o {
+										for _, depend := range depends {
+											if atomic.LoadInt32(me.executeMap[depend]) != 1 {
+												flag = false
+												break
+											}
+										}
+									}
+									if flag {
+										executeQueue = append(executeQueue, inversedDepend)
 									}
 								}
 							}
-							if flag {
-								executeQueue = append(executeQueue, inversedDepend)
+						}
+
+						if len(executeQueue) > 0 {
+							for _, eachName := range executeQueue {
+								if inChanel, ok := me.inChanels[eachName]; ok {
+									if atomic.LoadInt32(&me.executeStatus) == 0 {
+										inChanel <- true
+									}
+								}
 							}
 						}
 					}
 				}
-
-				if len(executeQueue) > 0 {
-					for _, eachName := range executeQueue {
-						if inChanel, ok := me.inChanels[eachName]; ok {
-							inChanel <- true
-						}
-					}
-				}
+			case <-me.ctxCtrl.Done():
+				breakFlag = true
 			}
+			if breakFlag {
+				break
+			}
+
 		}
 		return nil
 	})
@@ -227,58 +255,56 @@ func (me *Depends) operate(ctx context.Context) error {
 					fmt.Println(string(debug.Stack()))
 				}
 			}()
-			if flag, open := <-in; flag && open {
-				// 执行
-				go func(startC chan bool, addFlag int32) {
-					defer func() {
-						if p := recover(); p != nil {
-							if atomic.AddInt32(&addFlag, 1) == 1 {
-								startC <- true
-							}
-							fmt.Println(string(debug.Stack()))
-						}
-					}()
-					tNow := time.Now()
-					s.Run(ctx, me.dc)
-					if atomic.AddInt32(&addFlag, 1) == 1 {
-						startC <- true
-						close(startC)
-					}
-					eNow := time.Now()
-					fmt.Println(s.Name(), "执行", eNow.Sub(tNow).Milliseconds())
-				}(startC, addFlag)
 
-				select {
-				case <-me.ctxCtrl.Done():
-					atomic.AddInt32(&addFlag, 2)
-					if atomic.AddInt32(&me.executeStatus, 1) == 1 {
-						for _, in := range me.inChanels {
-							close(in)
+			select {
+			case flag, open := <-in:
+				if flag && open {
+					// 执行
+					go func(startC chan bool, addFlag int32) {
+						defer func() {
+							if p := recover(); p != nil {
+								if atomic.AddInt32(&addFlag, 1) == 1 {
+									startC <- true
+								}
+								fmt.Println(string(debug.Stack()))
+							}
+						}()
+						tNow := time.Now()
+						s.Run(ctx)
+						if atomic.AddInt32(&addFlag, 1) == 1 {
+							startC <- true
+							close(startC)
 						}
-						close(me.outChanel)
-					}
-				case <-startC:
-					atomic.StoreInt32(me.executeMap[s.Name()], 1)
-					finishExecuteCount := 0
-					finishFlag := false
-					for _, flag := range me.executeMap {
-						if *flag == 1 {
-							finishExecuteCount++
+						eNow := time.Now()
+						fmt.Println(s.Name(), "执行", eNow.Sub(tNow).Milliseconds())
+					}(startC, addFlag)
+					select {
+					case <-me.ctxCtrl.Done():
+						atomic.AddInt32(&addFlag, 2)
+					case <-startC:
+						atomic.StoreInt32(me.executeMap[s.Name()], 1)
+						finishExecuteCount := 0
+						finishFlag := false
+						for _, flag := range me.executeMap {
+							if atomic.LoadInt32(flag) == 1 {
+								finishExecuteCount++
+							}
 						}
-					}
-					if finishExecuteCount >= int(me.serviceCount) {
-						finishFlag = true
-					}
-					if !finishFlag {
-						if atomic.LoadInt32(&me.executeStatus) == 0 {
-							me.outChanel <- s.Name()
+						if finishExecuteCount >= int(me.serviceCount) {
+							finishFlag = true
 						}
-					} else {
-						(me.ctxCtrlCancel)()
+						if !finishFlag {
+							if atomic.LoadInt32(&me.executeStatus) == 0 {
+								me.outChanel <- s.Name()
+							}
+						} else {
+							(me.ctxCtrlCancel)()
+						}
 					}
 				}
+			case <-me.ctxCtrl.Done():
+				atomic.AddInt32(&addFlag, 2)
 			}
-
 		}(me.inChanels[service.Name()], service)
 	}
 	return nil
