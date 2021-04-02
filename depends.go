@@ -260,10 +260,10 @@ func (me *Depends) operate(ctx context.Context) error {
 			case flag, open := <-in:
 				if flag && open {
 					// 执行
-					go func(startC chan bool, addFlag int32) {
+					go func(startC chan bool, addFlag *int32) {
 						defer func() {
 							if p := recover(); p != nil {
-								if atomic.AddInt32(&addFlag, 1) == 1 {
+								if atomic.AddInt32(addFlag, 1) == 1 {
 									startC <- true
 								}
 								fmt.Println(string(debug.Stack()))
@@ -271,13 +271,13 @@ func (me *Depends) operate(ctx context.Context) error {
 						}()
 						tNow := time.Now()
 						s.Run(ctx)
-						if atomic.AddInt32(&addFlag, 1) == 1 {
+						if atomic.AddInt32(addFlag, 1) == 1 {
 							startC <- true
 							close(startC)
 						}
 						eNow := time.Now()
 						fmt.Println(s.Name(), "执行", eNow.Sub(tNow).Milliseconds())
-					}(startC, addFlag)
+					}(startC, &addFlag)
 					select {
 					case <-me.ctxCtrl.Done():
 						atomic.AddInt32(&addFlag, 2)
